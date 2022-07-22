@@ -4,7 +4,7 @@ import struct
 import array
 from collections import deque
 import sounddevice as sd
-import time 
+import os
 
 # ----------------------------------------------------------------
 #
@@ -18,8 +18,15 @@ import time
 # hci0 is the default one.
 
 controller_name = 'hci0'
-bluetile_mac = ''
+bluetile_mac = 'F8:71:17:CE:E6:84'
 bluetile_name = 'st1'
+reproduce = False
+
+# Bluetooth Internal Variables
+device1 = 0
+aud_char = 0
+sync_char = 0
+connected = False
 
 # UUIDs corresponding to BlueVoice characteristics
 service_uuid = '00000000-0001-11e1-9ab4-0002a5d5c51b'
@@ -111,6 +118,8 @@ def audio_decode(code):
 
 
 def extract_and_convert_audio(data):
+    global audFile
+
     if len(data) != 20:
         raise NameError('error: pkt data length wrong')
 
@@ -119,26 +128,35 @@ def extract_and_convert_audio(data):
         audio_dataPkt.append(audio_decode((b >> 4) & 0x0F))
 
     audio_audioPkt.append(array.array('h', audio_dataPkt).tobytes())
+    for a in audio_dataPkt:
+        audFile.write(str(a) + ',')
     audio_dataPkt.clear()
 
 
 def disconnect_on_exit(signum, frame):
-    global audio_audioPkt, device1
-    
-    device1.disconnect()
-    play = b''.join(audio_audioPkt)
-    sd.default.dtype = 'int16'
-    sd.default.channels = 1
-    stream = sd.RawOutputStream(samplerate=8000)
-    stream.start()
-    stream.write(play)	
+    global audio_audioPkt, device1, manager
+
+    if connected:
+        device1.disconnect()
+    manager.stop()
+    audFile.close()
+    if reproduce:
+        # TODO These lines produce errors quite easily - improvement: use a try statement.
+        play = b''.join(audio_audioPkt)
+        sd.default.dtype = 'int16'
+        sd.default.channels = 1
+        stream = sd.RawOutputStream(samplerate=8000)
+        stream.start()
+        stream.write(play)
     quit()
 
 
 class AnyDevice(gatt.Device):
     def connect_succeeded(self):
+        global connected
         super().connect_succeeded()
         print("[%s] Connected" % (self.mac_address))
+        connected = True
 
     def connect_failed(self, error):
         super().connect_failed(error)
@@ -178,7 +196,8 @@ class AnyDevice(gatt.Device):
         sync_char.enable_notifications()
 
         print("[%s] Services discovered - Will now stream audio" % (self.mac_address))
-        print("To stop sampling and reproduce the recorded audio press Ctrl+C")
+        print("To stop sampling and save the file press Ctrl+C")
+        print("If you set True to the \'reproduce\' variable, the recorded audio will be played.")
 
 
 class AnyDeviceManager(gatt.DeviceManager):
@@ -196,12 +215,12 @@ class AnyDeviceManager(gatt.DeviceManager):
 # Create a signal: disconnect stop and disconnect on Ctrl+C
 signal.signal(signal.SIGINT, disconnect_on_exit)
 
-# TODO: Create files
-# filename = "output/aud_" + bluetile_name + ".csv"
-# os.makedirs(os.path.dirname(filename), exist_ok=True)
-# audFile = open(filename, "w")
+filename = "output/aud_" + bluetile_name + ".csv"
+os.makedirs(os.path.dirname(filename), exist_ok=True)
+audFile = open(filename, "w")
 
 # Start the Bluetooth Manager
+bluetile_mac = bluetile_mac.lower()
 manager = AnyDeviceManager(adapter_name=controller_name)
 manager.start_discovery()
 # Blocking function: the script will now wait for notifications.
